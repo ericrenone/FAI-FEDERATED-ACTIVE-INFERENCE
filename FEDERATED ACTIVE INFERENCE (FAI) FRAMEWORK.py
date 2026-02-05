@@ -1,5 +1,5 @@
 """
-UNIFIED FEDERATED ACTIVE INFERENCE (FAI) FRAMEWORK
+FEDERATED ACTIVE INFERENCE (FAI) FRAMEWORK
 --------------------------------------------------
 Combines:
 1. Variational Model Selection (Simple vs. Complex Agents)
@@ -163,4 +163,5 @@ def animate(round_idx):
 
 ani = FuncAnimation(fig, animate, frames=NUM_ROUNDS, repeat=False, interval=50)
 print("Launching Federated Active Inference Dashboard...")
+
 plt.show()
