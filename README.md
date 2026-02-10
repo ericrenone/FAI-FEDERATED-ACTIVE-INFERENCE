@@ -1,4 +1,4 @@
-# Federated Active Inference (FAI) & Information Geometry
+# Federated-Agentic-Inference-Framework
 
 ## Core
 
