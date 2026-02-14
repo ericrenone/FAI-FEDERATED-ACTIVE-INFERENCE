@@ -1,0 +1,268 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+CRB ↔ Eckart–Young–Mirsky Geometric Unification Demo
+====================================================
+
+Standalone demonstration showing:
+ • Cramér-Rao Bound (multivariate Gaussian mean + confidence ellipse)
+ • Eckart–Young–Mirsky theorem (optimal low-rank approximation via SVD)
+
+Features:
+ • Self-contained – no external files needed
+ • Publication-quality plots
+ • Auto-created output folder
+ • Command-line configurable
+ • Informative logging
+
+
+"""
+
+import argparse
+import logging
+import sys
+from pathlib import Path
+
+import numpy as np
+import matplotlib.pyplot as plt
+from matplotlib.patches import Ellipse
+from scipy.stats import chi2
+
+
+def configure_logging() -> None:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s  %(levelname)-7s  %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+
+
+def set_publication_style() -> None:
+    plt.style.use("default")
+    plt.rcParams.update({
+        "figure.dpi": 160,
+        "savefig.dpi": 300,
+        "font.size": 11,
+        "axes.titlesize": 13,
+        "axes.labelsize": 11.5,
+        "xtick.labelsize": 10,
+        "ytick.labelsize": 10,
+        "legend.fontsize": 10.5,
+        "legend.framealpha": 0.94,
+        "grid.linestyle": ":",
+        "grid.alpha": 0.4,
+        "axes.formatter.useoffset": False,
+        "figure.constrained_layout.use": True,
+        "svg.fonttype": "none",
+    })
+
+
+def save_figure(fig: plt.Figure, path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(path, bbox_inches="tight", dpi=300)
+    plt.close(fig)
+    logging.info(f"Saved: {path}")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Cramér-Rao Bound – multivariate Gaussian mean estimation
+# ──────────────────────────────────────────────────────────────────────────────
+
+def run_crb_demo(
+    dim: int = 2,
+    n_samples: int = 2000,
+    n_trials: int = 1200,
+    seed: int = 20260203,
+    output_dir: Path = Path("results"),
+    reg: float = 1e-8,
+) -> None:
+    np.random.seed(seed)
+    true_mean = np.zeros(dim)
+    estimates = np.empty((n_trials, dim))
+
+    logging.info(f"CRB demo   dim={dim}   samples={n_samples}   trials={n_trials}")
+
+    for i in range(n_trials):
+        X = np.random.randn(n_samples, dim) + true_mean
+        estimates[i] = X.mean(axis=0)
+
+    cov_emp = np.cov(estimates, rowvar=False)
+    fisher = n_samples * np.eye(dim)
+    fisher_reg = fisher + max(reg, reg * n_samples) * np.eye(dim)
+    crb_cov = np.linalg.inv(fisher_reg)
+
+    logging.info(f"Empirical cov (top-left):\n{np.round(cov_emp[:3,:3], 6)}")
+    logging.info(f"CRB cov       (top-left):\n{np.round(crb_cov[:3,:3], 6)}")
+
+    if dim < 2:
+        logging.info("dim < 2 → skipping ellipse plot")
+        return
+
+    set_publication_style()
+    fig, ax = plt.subplots(figsize=(6.4, 6.4))
+
+    ax.scatter(
+        estimates[:, 0], estimates[:, 1],
+        s=10, alpha=0.65, lw=0, rasterized=True,
+        color="C0", label="MLE samples"
+    )
+
+    # 95% confidence ellipse
+    scale = chi2.ppf(0.95, df=dim)
+    vals, vecs = np.linalg.eigh(crb_cov * scale)
+    angle_deg = np.degrees(np.arctan2(vecs[1, 0], vecs[0, 0]))
+
+    ellipse = Ellipse(
+        xy=true_mean[:2],
+        width=2 * np.sqrt(vals[0]),
+        height=2 * np.sqrt(vals[1]),
+        angle=angle_deg,
+        facecolor="none",
+        edgecolor="#d62728",
+        lw=1.9,
+        alpha=0.92,
+        label="95% CRB ellipse"
+    )
+    ax.add_patch(ellipse)
+
+    ax.plot(*true_mean[:2], "k*", ms=14, label="True mean")
+    ax.set_xlabel(r"$\hat{\mu}_1$")
+    ax.set_ylabel(r"$\hat{\mu}_2$")
+    ax.set_title("MLE distribution vs Cramér-Rao 95% confidence ellipse")
+    ax.grid(True)
+    ax.legend()
+    ax.set_aspect("equal")
+
+    save_figure(fig, output_dir / "crb_ellipse.png")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Eckart–Young–Mirsky low-rank approximation demo
+# ──────────────────────────────────────────────────────────────────────────────
+
+def run_eym_demo(
+    rows: int = 80,
+    cols: int = 120,
+    true_rank: int = 10,
+    keep_rank: int = 4,
+    noise_std: float = 0.75,
+    seed: int = 20260204,
+    output_dir: Path = Path("results"),
+) -> None:
+    np.random.seed(seed)
+
+    if max(rows, cols) < true_rank or keep_rank > true_rank:
+        raise ValueError(
+            f"Incompatible: matrix {rows}×{cols}, true_rank={true_rank}, keep_rank={keep_rank}"
+        )
+
+    logging.info(
+        f"EYM demo   {rows}×{cols}   true rank={true_rank}   keep={keep_rank}   noise σ={noise_std}"
+    )
+
+    s_true = np.linspace(20, 4, true_rank) ** 1.15
+
+    # ─── Correct orthonormal bases via thin QR ───────────────────────────────
+    # U  → orthonormal columns  (rows × true_rank)
+    # Vh → orthonormal rows     (true_rank × cols)
+    U = np.linalg.qr(np.random.randn(rows, true_rank))[0]          # (rows, true_rank)
+    V = np.linalg.qr(np.random.randn(cols, true_rank))[0]          # (cols, true_rank)
+    Vh = V.T                                                       # (true_rank, cols)
+
+    signal = U @ np.diag(s_true) @ Vh                              # → (rows, cols)
+
+    data = signal + noise_std * np.random.randn(rows, cols)
+
+    U_s, s_s, Vh_s = np.linalg.svd(data, full_matrices=False)
+
+    recon = U_s[:, :keep_rank] @ np.diag(s_s[:keep_rank]) @ Vh_s[:keep_rank, :]
+    err_frob = np.linalg.norm(data - recon, "fro")
+    tail_energy = np.sqrt(np.sum(s_s[keep_rank:] ** 2))
+
+    logging.info(f"Frobenius recon error     = {err_frob:.4f}")
+    logging.info(f"E-Y tail bound            = {tail_energy:.4f}")
+    logging.info(f"error / bound ratio       = {err_frob / tail_energy:.4f}")
+
+    set_publication_style()
+    fig, ax = plt.subplots(figsize=(8.2, 4.8))
+
+    indices = np.arange(1, len(s_s) + 1)
+    ax.bar(indices, s_s, width=0.82, color="C0", alpha=0.86, label="Singular values")
+    ax.axvline(
+        keep_rank + 0.5,
+        color="#a02c2c", ls="--", lw=1.8, alpha=0.9,
+        label=f"truncation @ rank {keep_rank}"
+    )
+
+    ax.set_yscale("log")
+    ax.set_xlabel("Singular value index")
+    ax.set_ylabel(r"$\sigma_i$  (log scale)")
+    ax.set_title("Singular value spectrum of noisy low-rank matrix")
+    ax.grid(True, axis="y")
+    ax.legend()
+
+    save_figure(fig, output_dir / "svd_spectrum.png")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# CLI & entry point
+# ──────────────────────────────────────────────────────────────────────────────
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="CRB ↔ Eckart-Young-Mirsky low-rank approximation demo",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    g = parser.add_argument_group("General")
+    g.add_argument("--output-dir", type=Path, default=Path("results"))
+    g.add_argument("--seed", type=int, default=20260203)
+
+    g = parser.add_argument_group("CRB settings")
+    g.add_argument("--crb-dim", type=int, default=2)
+    g.add_argument("--crb-samples", type=int, default=2000)
+    g.add_argument("--crb-trials", type=int, default=1200)
+
+    g = parser.add_argument_group("EYM settings")
+    g.add_argument("--eym-rows", type=int, default=80)
+    g.add_argument("--eym-cols", type=int, default=120)
+    g.add_argument("--eym-true-rank", type=int, default=10)
+    g.add_argument("--eym-keep-rank", type=int, default=4)
+    g.add_argument("--eym-noise-std", type=float, default=0.75)
+
+    return parser.parse_args()
+
+
+def main() -> int:
+    args = parse_args()
+    configure_logging()
+    logging.info("Starting CRB ↔ EYM demo")
+
+    try:
+        run_crb_demo(
+            dim=args.crb_dim,
+            n_samples=args.crb_samples,
+            n_trials=args.crb_trials,
+            seed=args.seed,
+            output_dir=args.output_dir,
+        )
+
+        run_eym_demo(
+            rows=args.eym_rows,
+            cols=args.eym_cols,
+            true_rank=args.eym_true_rank,
+            keep_rank=args.eym_keep_rank,
+            noise_std=args.eym_noise_std,
+            seed=args.seed + 1,  # different noise
+            output_dir=args.output_dir,
+        )
+
+        logging.info(f"Finished. Plots saved in: {args.output_dir.resolve()}")
+        return 0
+
+    except Exception as e:
+        logging.error(f"Execution failed: {e}", exc_info=True)
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
